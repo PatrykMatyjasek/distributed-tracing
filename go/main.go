@@ -2,14 +2,18 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
+	"net/http/httptrace"
 
+	"go.opentelemetry.io/contrib/instrumentation/net/http/httptrace/otelhttptrace"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 
 	"go.opentelemetry.io/otel"
-	stdout "go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/exporters/jaeger"
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -18,11 +22,10 @@ import (
 )
 
 func initTracer() *sdktrace.TracerProvider {
-	// Create stdout exporter to be able to retrieve
-	// the collected spans.
-	exporter, err := stdout.New(stdout.WithPrettyPrint())
+	// Create jaeger exporter
+	exporter, err := jaeger.New(jaeger.WithCollectorEndpoint(jaeger.WithEndpoint("http://localhost:14268/api/traces")))
 	if err != nil {
-		log.Fatal(err)
+		return nil
 	}
 
 	// For the demonstration, use sdktrace.AlwaysSample sampler to sample all traces.
@@ -57,8 +60,22 @@ func main() {
 func handler(w http.ResponseWriter, req *http.Request) {
 	ctx := req.Context()
 	span := trace.SpanFromContext(ctx)
+	defer span.End()
 	span.AddEvent("handling this request")
+	url := "https://www.wp.pl/"
+	client := http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)}
 
 	_, _ = io.WriteString(w, "Hello, from Go!\n")
+
+	ctx = httptrace.WithClientTrace(ctx, otelhttptrace.NewClientTrace(ctx))
+	req, _ = http.NewRequestWithContext(ctx, "GET", url, nil)
+
+	fmt.Printf("Sending request...\n")
+	res, err := client.Do(req)
+	if err != nil {
+		panic(err)
+	}
+	_, err = ioutil.ReadAll(res.Body)
+	_ = res.Body.Close()
 
 }
